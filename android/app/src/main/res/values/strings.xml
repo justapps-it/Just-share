@@ -37,4 +37,12 @@
     <string name="copy">Copy</string>
     <string name="web_title">iPhone, computer, or no Bluetooth?</string>
     <string name="web_text">Open share.justapps.it on both devices: it works on any phone and PC, over Wi-Fi, with a code from anywhere, or fully offline with the camera.</string>
+    <string name="nfc_service">JustShare: touch to send</string>
+    <string name="nfc_title">Touch to send (NFC)</string>
+    <string name="nfc_armed">Ready: touch the back of the other phone. It must have JustShare open with nothing selected. No code to confirm.</string>
+    <string name="nfc_idle">To receive, just keep JustShare open: the other phone sends by touching this one.</string>
+    <string name="nfc_off">NFC is off: turn it on to send by touching phones.</string>
+    <string name="nfc_settings">Turn on NFC</string>
+    <string name="nfc_open_app">Open JustShare on the other phone (with nothing selected) and touch again.</string>
+    <string name="nfc_not_found">The other phone didn’t show up over Bluetooth/Wi-Fi. Keep JustShare open on both and try again.</string>
 </resources>

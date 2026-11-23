@@ -1,6 +1,12 @@
 package it.justapps.justshare
 
 import android.Manifest
+import android.app.Activity
+import android.content.ComponentName
+import android.nfc.NdefRecord
+import android.nfc.NfcAdapter
+import android.nfc.cardemulation.CardEmulation
+import android.nfc.tech.Ndef
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -67,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 val Orange = Color(0xFFFF5A1F)
@@ -120,10 +127,36 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val nfc by lazy { NfcAdapter.getDefaultAdapter(this) }
+    private val tapService by lazy { ComponentName(this, TapService::class.java) }
+
+    override fun onResume() {
+        super.onResume()
+        // While JustShare is open, our tag wins over other apps using the same NFC AID.
+        nfc?.let { runCatching { CardEmulation.getInstance(it).setPreferredService(this, tapService) } }
+    }
+
+    override fun onPause() {
+        nfc?.let { runCatching { CardEmulation.getInstance(it).unsetPreferredService(this) } }
+        super.onPause()
+    }
+
     override fun onDestroy() {
         if (isFinishing) Share.stop()
         super.onDestroy()
     }
+}
+
+/** Reads the other phone (which acts as an NFC tag) and hands its token to Share. */
+fun readTap(tag: android.nfc.Tag) {
+    val ndef = Ndef.get(tag) ?: return Share.onTapUnknown()
+    val msg = ndef.cachedNdefMessage ?: runCatching {
+        ndef.connect()
+        ndef.ndefMessage.also { ndef.close() }
+    }.getOrNull()
+    val rec = msg?.records?.firstOrNull { it.tnf == NdefRecord.TNF_EXTERNAL_TYPE && String(it.type) == Tap.TYPE }
+    val parsed = rec?.let { Tap.parsePayload(it.payload) } ?: return Share.onTapUnknown()
+    Share.onTapRead(parsed.first)
 }
 
 @Composable
@@ -167,6 +200,25 @@ fun Screen(shared: List<Uri>, sharedText: String?, onSharedConsumed: () -> Unit)
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { picked = it }
 
     LaunchedEffect(granted, name) { if (granted) Share.start(name) }
+
+    // NFC: with something selected this phone reads (touch the other phone to send);
+    // otherwise it stays an NFC tag that other phones can read.
+    val nfc = remember { NfcAdapter.getDefaultAdapter(ctx) }
+    LaunchedEffect(outgoing, outgoingText) { Share.arm(outgoing, outgoingText) }
+    LaunchedEffect(st.tapSent) {
+        if (st.tapSent > 0) {
+            picked = emptyList()
+            text = ""
+            onSharedConsumed()
+        }
+    }
+    LifecycleResumeEffect(st.armed, granted) {
+        val activity = ctx as Activity
+        if (st.armed && granted && nfc?.isEnabled == true) {
+            nfc.enableReaderMode(activity, ::readTap, NfcAdapter.FLAG_READER_NFC_A or NfcAdapter.FLAG_READER_NFC_B, null)
+        }
+        onPauseOrDispose { runCatching { nfc?.disableReaderMode(activity) } }
+    }
 
     LazyColumn(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding(),
@@ -236,6 +288,28 @@ fun Screen(shared: List<Uri>, sharedText: String?, onSharedConsumed: () -> Unit)
                     stringResource(if (outgoing.isEmpty() && outgoingText == null) R.string.tap_hint_empty else R.string.tap_hint),
                     color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp,
                 )
+            }
+            if (nfc != null) {
+                item {
+                    Panel(highlight = st.armed && nfc.isEnabled) {
+                        Text("📲  " + stringResource(R.string.nfc_title), fontWeight = FontWeight.Bold)
+                        Text(
+                            stringResource(
+                                when {
+                                    !nfc.isEnabled -> R.string.nfc_off
+                                    st.armed -> R.string.nfc_armed
+                                    else -> R.string.nfc_idle
+                                },
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(top = 4.dp),
+                        )
+                        if (!nfc.isEnabled) {
+                            TextButton({ runCatching { ctx.startActivity(Intent(android.provider.Settings.ACTION_NFC_SETTINGS)) } }) {
+                                Text(stringResource(R.string.nfc_settings), color = Orange)
+                            }
+                        }
+                    }
+                }
             }
             if (st.endpoints.isEmpty()) {
                 item { Panel { Text(stringResource(R.string.searching), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) } }

@@ -36,4 +36,12 @@
     <string name="copy">Copia</string>
     <string name="web_title">iPhone, computer o niente Bluetooth?</string>
     <string name="web_text">Apri share.justapps.it su entrambi i dispositivi: funziona su qualsiasi telefono e PC, sulla stessa Wi-Fi, con un codice da ovunque o completamente offline con la fotocamera.</string>
+    <string name="nfc_service">JustShare: tocca per inviare</string>
+    <string name="nfc_title">Tocca per inviare (NFC)</string>
+    <string name="nfc_armed">Pronto: avvicina il retro dell’altro telefono. Deve avere JustShare aperta senza nulla selezionato. Nessun codice da confermare.</string>
+    <string name="nfc_idle">Per ricevere basta tenere JustShare aperta: l’altro telefono invia toccando questo.</string>
+    <string name="nfc_off">L’NFC è spento: attivalo per inviare avvicinando i telefoni.</string>
+    <string name="nfc_settings">Attiva NFC</string>
+    <string name="nfc_open_app">Apri JustShare sull’altro telefono (senza nulla selezionato) e riavvicinali.</string>
+    <string name="nfc_not_found">L’altro telefono non è comparso via Bluetooth/Wi-Fi. Tieni JustShare aperta su entrambi e riprova.</string>
 </resources>

@@ -3,6 +3,8 @@ package it.justapps.justshare
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -44,7 +46,7 @@ data class Meta(val payloadId: Long, val name: String, val size: Long, val mime:
 fun textMessage(text: String): String = JSONObject().put("t", "text").put("text", text).toString()
 fun parseText(s: String): String? = runCatching { JSONObject(s).takeIf { it.optString("t") == "text" }?.getString("text") }.getOrNull()
 
-data class Endpoint(val id: String, val name: String)
+data class Endpoint(val id: String, val name: String, val tapHash: String? = null)
 
 data class PendingConnection(val endpointId: String, val name: String, val digits: String, val incoming: Boolean)
 
@@ -69,6 +71,10 @@ data class UiState(
     val connected: Set<String> = emptySet(),
     val items: List<Item> = emptyList(),
     val error: String? = null,
+    /** Something is selected: touching another phone (NFC) sends it. */
+    val armed: Boolean = false,
+    /** Bumped when a tap consumed the selection. */
+    val tapSent: Int = 0,
 )
 
 /**
@@ -92,6 +98,13 @@ object Share {
     private val outbox = HashMap<String, Pair<List<Uri>, String?>>()
     private val incomingMeta = HashMap<Long, Meta>()
     private val incomingFiles = HashMap<Long, Payload>()
+    private val main = Handler(Looper.getMainLooper())
+
+    // NFC tap to send (see Tap.kt).
+    @Volatile private var token = Tap.newToken()
+    private var tapOutbox: Pair<List<Uri>, String?>? = null
+    private var pendingTap: String? = null
+    private var tapTarget: String? = null
 
     fun init(ctx: Context) {
         if (::client.isInitialized) return
@@ -102,11 +115,78 @@ object Share {
     fun start(name: String) {
         myName = name
         if (_state.value.advertising) return
-        client.startAdvertising(name, SERVICE_ID, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).build())
-            .addOnSuccessListener { _state.update { it.copy(advertising = true, error = null) } }
-            .addOnFailureListener { e -> if (!e.isAlreadyRunning()) _state.update { it.copy(error = e.message) } }
+        advertise()
         client.startDiscovery(SERVICE_ID, discovery, DiscoveryOptions.Builder().setStrategy(strategy).build())
             .addOnFailureListener { e -> if (!e.isAlreadyRunning()) _state.update { it.copy(error = e.message) } }
+    }
+
+    private fun advertise() {
+        client.startAdvertising(Tap.advertised(myName, token), SERVICE_ID, lifecycle, AdvertisingOptions.Builder().setStrategy(strategy).build())
+            .addOnSuccessListener { _state.update { it.copy(advertising = true, error = null) } }
+            .addOnFailureListener { e -> if (!e.isAlreadyRunning()) _state.update { it.copy(error = e.message) } }
+    }
+
+    /** New one-time token after each tap, so a read token can't be replayed. */
+    private fun rotateToken() {
+        token = Tap.newToken()
+        if (_state.value.advertising) {
+            client.stopAdvertising()
+            advertise()
+        }
+    }
+
+    /** What this phone answers when another phone reads it over NFC. */
+    fun tapMessage(): ByteArray =
+        if (::client.isInitialized && _state.value.advertising) Tap.ndefMessage(token, myName) else Tap.ndefMessage(null, "")
+
+    /** Files/text that a tap will send (null: nothing selected, phone acts as an NFC tag). */
+    fun arm(uris: List<Uri>, text: String?) {
+        tapOutbox = if (uris.isEmpty() && text.isNullOrBlank()) null else uris to text
+        _state.update { it.copy(armed = tapOutbox != null) }
+    }
+
+    /** Called from the NFC reader thread with the record read from the other phone. */
+    fun onTapRead(otherToken: String) {
+        main.post { tapRead(otherToken) }
+    }
+
+    private fun tapRead(otherToken: String) {
+        if (otherToken.isEmpty()) {
+            _state.update { it.copy(error = app.getString(R.string.nfc_open_app)) }
+            return
+        }
+        val hash = Tap.hash(otherToken)
+        val found = _state.value.endpoints.firstOrNull { it.tapHash == hash }
+        if (found != null) sendTap(found.id, otherToken)
+        else {
+            // Discovery can lag behind the tap: wait a little for that phone to show up.
+            pendingTap = otherToken
+            main.postDelayed({
+                if (pendingTap == otherToken) {
+                    pendingTap = null
+                    _state.update { it.copy(error = app.getString(R.string.nfc_not_found)) }
+                }
+            }, 20_000)
+        }
+    }
+
+    fun onTapUnknown() {
+        main.post { _state.update { it.copy(error = app.getString(R.string.nfc_open_app)) } }
+    }
+
+    private fun sendTap(endpointId: String, otherToken: String) {
+        pendingTap = null
+        val (uris, text) = tapOutbox ?: return
+        tapOutbox = null
+        _state.update { it.copy(armed = false, tapSent = it.tapSent + 1) }
+        if (endpointId in _state.value.connected) {
+            transmit(endpointId, uris, text)
+            return
+        }
+        tapTarget = endpointId
+        outbox[endpointId] = uris to text
+        client.requestConnection(Tap.requesting(myName, otherToken), endpointId, lifecycle)
+            .addOnFailureListener { e -> tapTarget = null; outbox.remove(endpointId); _state.update { it.copy(error = e.message) } }
     }
 
     fun stop() {
@@ -122,8 +202,10 @@ object Share {
 
     private val discovery = object : EndpointDiscoveryCallback() {
         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
-            names[endpointId] = info.endpointName
-            _state.update { s -> s.copy(endpoints = (s.endpoints.filter { it.id != endpointId } + Endpoint(endpointId, info.endpointName)).sortedBy { it.name }) }
+            val p = Tap.parse(info.endpointName)
+            names[endpointId] = p.name
+            _state.update { s -> s.copy(endpoints = (s.endpoints.filter { it.id != endpointId } + Endpoint(endpointId, p.name, p.hash)).sortedBy { it.name }) }
+            pendingTap?.let { t -> if (p.hash == Tap.hash(t)) sendTap(endpointId, t) }
         }
 
         override fun onEndpointLost(endpointId: String) {
@@ -155,9 +237,22 @@ object Share {
 
     private val lifecycle = object : ConnectionLifecycleCallback() {
         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
-            names[endpointId] = info.endpointName
+            val p = Tap.parse(info.endpointName)
+            names[endpointId] = p.name
+            // Started by touching the phones: the tap is the consent. The token
+            // was only readable over NFC (a few cm), so no code to compare.
+            if (info.isIncomingConnection && p.token != null && p.token == token) {
+                rotateToken()
+                accept(endpointId)
+                return
+            }
+            if (!info.isIncomingConnection && endpointId == tapTarget) {
+                tapTarget = null
+                accept(endpointId)
+                return
+            }
             // Both sides must confirm the same code (protects against a device in the middle).
-            _state.update { it.copy(pending = PendingConnection(endpointId, info.endpointName, info.authenticationDigits, info.isIncomingConnection)) }
+            _state.update { it.copy(pending = PendingConnection(endpointId, p.name, info.authenticationDigits, info.isIncomingConnection)) }
         }
 
         override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
