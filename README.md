@@ -20,6 +20,18 @@
 - Every file carries a BLAKE2b-256 checksum, verified on arrival.
 - The edge Worker (`worker/index.ts`, Durable Objects) only relays connection setup messages between devices in the same room; it never sees file data and stores nothing.
 
+## Android app
+
+`android/` is a native Kotlin app using **Nearby Connections** (Bluetooth, BLE, Wi-Fi Direct / hotspot): Android phones find each other and transfer files with no internet, like Quick Share. Both phones show the same code before accepting; connections are encrypted. Received files go to *Downloads/JustShare*. It appears in every app's *Share* menu. For iPhone, computers or the camera mode it links to the web app.
+
+The signed APK is a GitHub release asset ([latest](https://github.com/justapps-it/Just-share/releases/latest/download/JustShare.apk)); the site shows the download card automatically. Release a new version with one command:
+
+```bash
+npm run release:android     # patch (or minor, major, x.y.z): tests, build, sign, push, GitHub release
+```
+
+It needs the Android SDK and the JustApps release key (`JUSTSHARE_KEYSTORE` / `JUSTSHARE_KEYSTORE_PASSWORD`, or the `JUSTCLIP_*` ones, in `~/.gradle/gradle.properties`).
+
 ## Relay (optional)
 
 Some mobile networks block direct peer-to-peer connections. To enable the encrypted relay fallback, create a TURN key in the Cloudflare dashboard (*Realtime → TURN*) and store it as Worker secrets:

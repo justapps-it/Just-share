@@ -1,0 +1,44 @@
+name: Android release
+
+# Publishes android/release/JustShare.apk (built and signed locally, see
+# README) as a GitHub release whenever it changes. The tag is
+# android-v<versionName> from android/app/build.gradle.kts.
+on:
+  push:
+    paths:
+      - android/release/JustShare.apk
+      - .github/workflows/android-release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version and checksum
+        id: v
+        run: |
+          version=$(grep -oP 'versionName\s*=\s*"\K[^"]+' android/app/build.gradle.kts)
+          echo "tag=android-v$version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          sha256sum android/release/JustShare.apk | tee android/release/JustShare.apk.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: JustShare for Android ${{ steps.v.outputs.version }}
+          make_latest: true
+          files: |
+            android/release/JustShare.apk
+            android/release/JustShare.apk.sha256
+          body: |
+            **JustShare for Android** — share files with nearby phones, even offline (Bluetooth / Wi-Fi Direct).
+
+            1. Download **JustShare.apk** below on your phone.
+            2. Open it and allow installing from this source (Android 10 or newer).
+            3. Open JustShare on both phones, pick files and tap the other device. Received files go to *Downloads/JustShare*.
+
+            🇮🇹 Scarica **JustShare.apk** sul telefono, aprilo e consenti l'installazione da questa fonte. Apri JustShare su entrambi i telefoni; i file ricevuti finiscono in *Download/JustShare*.
